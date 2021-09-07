@@ -19,38 +19,35 @@ from ui.main_windows import Ui_MainWindow
 _global_dict = {}
 mail_service = MailService()
 
-# 继承 QObject
-class TimeConsumingRunThread(QtCore.QObject):
-    """
-    定义耗时长的操作
-    """
+class TaskThread():
 
-    # 通过类成员对象定义信号对象，可定义多个
-    _signal = pyqtSignal(str)
-    # 定义异常错误
-    _error_logs = {}
+    signal = None
+    info_callback = None
 
-    def __init__(self):
-        super(TimeConsumingRunThread, self).__init__()
-        self.flag = True
+    def __init__(self, result_txt, test_error, target_error, targets):
+        super(TaskThread, self).__init__()
+        self.result_txt = result_txt
+        self.test_error = test_error
+        self.target_error = target_error
+        self.targets = targets
+        self._error_logs = {}
 
-    def __del__(self):
-        print
-        ">>> __del__"
+    def set_info_callback(self, emit):
+        self.info_callback = emit
 
     def run(self):
-        start_time = int(time.time())
-        my_windows = _global_dict["parent"]
-
+        """
+        必须定义run方法，出发就用run方法触发
+        """
         exec_queue = queue.Queue()
         self._error_logs = {}
         exist_error = False
         with ThreadPoolExecutor(max_workers=None) as executor:
             task_dict, task_list = {}, []
-            for i in range(len(my_windows.mails)):
-                mail = my_windows.mails[i]
-                task = executor.submit(mail_service.send, exec_queue, my_windows.result_txt, self._signal,
-                                       self._error_logs, mail, i, my_windows.test_error)
+            for i in range(len(self.targets)):
+                mail = self.targets[i]
+                task = executor.submit(mail_service.send, exec_queue, self.result_txt, self._error_logs,
+                                       mail, i, self.info_callback, self.test_error)
                 task_dict[task] = mail
                 task_list.append(task)
             wait(task_list, return_when=FIRST_EXCEPTION)
@@ -66,15 +63,15 @@ class TimeConsumingRunThread(QtCore.QObject):
                     target = task_dict.get(task)
                     if "finished returned NoneType" in str(task) or task.cancelled():
                         exist_error = True
-                        self._signal.emit(",".join([target, "true"]))
+                        self.info_callback(",".join([target, "true"]))
                         print("{}被取消".format(target))
                     elif "finished raised Exception" in str(task):
                         exist_error = True
                         print("{}执行异常".format(target))
-                        self._signal.emit(",".join([target, "true"]))
-                        my_windows.mails_error.append(target)
-                        show_message(my_windows.result_txt, "文件转换异常：%s" % target, "error")
-                        show_message(my_windows.result_txt, self._error_logs[target], "error")
+                        self.info_callback(",".join([target, "true"]))
+                        self.target_error.append(target)
+                        show_message(self.result_txt, "email发送异常：%s" % target, "error")
+                        show_message(self.result_txt, self._error_logs[target], "error")
                         # 如果异常就将线程池关掉，以免还进行后续操作
                         print("线程关闭")
                         executor.shutdown()
@@ -82,6 +79,33 @@ class TimeConsumingRunThread(QtCore.QObject):
                         print("{}执行成功".format(target))
         if not exist_error:
             print("整体运作正常")
+
+# 继承 QObject
+class TimeConsumingRunThread(QtCore.QObject):
+    """
+    定义耗时长的操作
+    """
+
+    # 通过类成员对象定义信号对象，可定义多个
+    _signal = pyqtSignal(str)
+
+    def __init__(self, main_handle):
+        super(TimeConsumingRunThread, self).__init__()
+        self.flag = True
+        self.main_handle = main_handle
+        self.main_handle.set_info_callback(self.success_back)
+
+    def success_back(self, content):
+        self._signal.emit(content)
+
+    def __del__(self):
+        print
+        ">>> __del__"
+
+    def run(self):
+        start_time = int(time.time())
+
+        self.main_handle.run()
 
         end_time = int(time.time())
         print("total_time", end_time - start_time)
@@ -109,7 +133,8 @@ class myWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         """
         多线程
         """
-        self.time_consuming_thread = TimeConsumingRunThread()  # 1. 初始化自定义线程对象,耗时长的在这里
+        task_thread = TaskThread(self.result_txt, self.test_error, self.mails_error, self.mails)
+        self.time_consuming_thread = TimeConsumingRunThread(task_thread)  # 1. 初始化自定义线程对象,耗时长的在这里
         self.thread_root = QThread(self)  # 2.创建QT线程
         _global_dict["parent"] = self
 

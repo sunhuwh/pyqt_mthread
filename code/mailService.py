@@ -4,7 +4,7 @@ from log import show_message
 class MailService:
     """邮件处理"""
 
-    def send(self, exec_queue, msg_text_browser, signal, error_logs, mail_addresses, mail_index, test_error=False):
+    def send(self, exec_queue, msg_text_browser, error_logs, mail_addresses, mail_index, info_callback, test_error=False):
         """
         发送邮件
         :param mail_addresses:
@@ -19,7 +19,7 @@ class MailService:
                 i = 1
                 while i <= 1000:
                     i += 1
-                signal.emit(mail_address)
+                info_callback(mail_address)
             else:
                 if mail_index == 3:
                     raise Exception("处理错误")
@@ -28,7 +28,7 @@ class MailService:
                     j = 1
                     while j <= 500:
                         j += 1
-                    signal.emit(mail_address)
+                    info_callback(mail_address)
                     show_message(msg_text_browser, "%s 运行完成" % mail_address)
         except Exception as e:
             error_logs[mail_addresses] = str(e)
