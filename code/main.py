@@ -1,7 +1,6 @@
 import queue
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed, wait, ALL_COMPLETED, FIRST_EXCEPTION
-from concurrent.futures.thread import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED, FIRST_EXCEPTION
 from PyQt5 import QtWidgets, QtCore
 import os
 from PyQt5.QtCore import pyqtSignal, QThread
@@ -19,9 +18,10 @@ class TimeConsumingRunThread(QtCore.QObject):
     定义耗时长的操作
     """
 
-    #  通过类成员对象定义信号对象，可定义多个
-    signal = pyqtSignal(str)
-    error_logs = {}
+    # 通过类成员对象定义信号对象，可定义多个
+    _signal = pyqtSignal(str)
+    # 定义异常错误
+    _error_logs = {}
 
     def __init__(self):
         super(TimeConsumingRunThread, self).__init__()
@@ -31,13 +31,8 @@ class TimeConsumingRunThread(QtCore.QObject):
         print
         ">>> __del__"
 
-    def handle_done(self, future):
-        """结束后运行"""
-        result = future.result()
-        self.signal.emit(result)
-
     def run(self):
-        self.error_logs = {}
+        self._error_logs = {}
         exec_queue = queue.Queue()
         my_windows = _global_dict["parent"]
         start_time = int(time.time())
@@ -62,15 +57,15 @@ class TimeConsumingRunThread(QtCore.QObject):
                     target = task_dict.get(task)
                     if "finished returned NoneType" in str(task) or task.cancelled():
                         exist_error = True
-                        self.signal.emit(",".join([target, "true"]))
+                        self._signal.emit(",".join([target, "true"]))
                         print("{}被取消".format(target))
                     elif "finished raised Exception" in str(task):
                         exist_error = True
                         print("{}执行异常".format(target))
-                        self.signal.emit(",".join([target, "true"]))
+                        self._signal.emit(",".join([target, "true"]))
                         my_windows.mails_error.append(target)
                         show_message(my_windows, "文件转换异常：%s" % target, "error")
-                        show_message(my_windows, self.error_logs[target], "error")
+                        show_message(my_windows, self._error_logs[target], "error")
                         # 如果异常就将线程池关掉，以免还进行后续操作
                         print("线程关闭")
                         executor.shutdown()
@@ -110,7 +105,7 @@ class myWindow(QtWidgets.QMainWindow, Ui_MainWindow):
 
         self.time_consuming_thread.moveToThread(self.thread_root)  # 3.自定义线程移到QT线程中
         self._startThread_my_signal.connect(self.time_consuming_thread.run)  # 4.创建信号-槽 通过信号-槽启动线程处理函数，只能通过 _startThread.emit()来出发
-        self.time_consuming_thread.signal.connect(self.call_backlog)  # 5.创建信号回调函数，通过self.signal.emit(mail)
+        self.time_consuming_thread._signal.connect(self.call_backlog)  # 5.创建信号回调函数，通过self.signal.emit(mail)
 
 
     def submit(self):
