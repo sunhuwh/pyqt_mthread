@@ -7,7 +7,6 @@ description: 解决pyQT在多线程环境下，任务时间长导致页面假死
 2. 子进程中如果有多线程，并且多线程下，如果某个任务异常，则终止所有剩余任务（当然，也可以自定义不终止所有）
 """
 from PyQt5 import QtWidgets
-import os
 from PyQt5.QtCore import pyqtSignal, QThread
 
 from TaskThreadService import *
