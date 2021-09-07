@@ -1,3 +1,10 @@
+"""
+description: 解决pyQT在多线程环境下，任务时间长导致页面假死问题以及多线程下任务异常问题
+解决方案：
+1. 定义一个子进程，专门做长时间操作
+2. 子进程中如果有多线程，并且多线程下，如果某个任务异常，则终止所有剩余任务（当然，也可以自定义不终止所有）
+"""
+
 import queue
 import time
 from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED, FIRST_EXCEPTION
@@ -32,16 +39,18 @@ class TimeConsumingRunThread(QtCore.QObject):
         ">>> __del__"
 
     def run(self):
-        self._error_logs = {}
-        exec_queue = queue.Queue()
-        my_windows = _global_dict["parent"]
         start_time = int(time.time())
+        my_windows = _global_dict["parent"]
+
+        exec_queue = queue.Queue()
+        self._error_logs = {}
         exist_error = False
         with ThreadPoolExecutor(max_workers=None) as executor:
             task_dict, task_list = {}, []
-            for i in range(len(myWindow.mails)):
-                mail = myWindow.mails[i]
-                task = executor.submit(mail_service.send, exec_queue, self, mail, i, my_windows.test_error)
+            for i in range(len(my_windows.mails)):
+                mail = my_windows.mails[i]
+                task = executor.submit(mail_service.send, exec_queue, my_windows.result_txt, self._signal,
+                                       self._error_logs, mail, i, my_windows.test_error)
                 task_dict[task] = mail
                 task_list.append(task)
             wait(task_list, return_when=FIRST_EXCEPTION)
@@ -64,8 +73,8 @@ class TimeConsumingRunThread(QtCore.QObject):
                         print("{}执行异常".format(target))
                         self._signal.emit(",".join([target, "true"]))
                         my_windows.mails_error.append(target)
-                        show_message(my_windows, "文件转换异常：%s" % target, "error")
-                        show_message(my_windows, self._error_logs[target], "error")
+                        show_message(my_windows.result_txt, "文件转换异常：%s" % target, "error")
+                        show_message(my_windows.result_txt, self._error_logs[target], "error")
                         # 如果异常就将线程池关掉，以免还进行后续操作
                         print("线程关闭")
                         executor.shutdown()
@@ -73,6 +82,7 @@ class TimeConsumingRunThread(QtCore.QObject):
                         print("{}执行成功".format(target))
         if not exist_error:
             print("整体运作正常")
+
         end_time = int(time.time())
         print("total_time", end_time - start_time)
 
@@ -116,7 +126,7 @@ class myWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         # mywindows = global_dict["parent"]
         self.mails_error = []
         self.mails_done = []
-        show_message(self, "邮件发送中")
+        show_message(self.result_txt, "邮件发送中")
         self.pushButton.setText("发送中")
         self.pushButton.setEnabled(False)
         self.progressBar.setValue(0)
@@ -129,7 +139,7 @@ class myWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         self._startThread_my_signal.emit()
 
     def stop(self):
-        show_message(self, "主线程停止")
+        show_message(self.result_txt, "主线程停止")
         self.pushButton.setText("开始发送")
         self.pushButton.setEnabled(True)
         if not self.thread_root.isRunning():  # 如果该线程已经结束，则不再重新关闭
@@ -149,9 +159,9 @@ class myWindow(QtWidgets.QMainWindow, Ui_MainWindow):
             if msg:
                 self.mails_done.append(msg)
                 self.progressBar.setValue(int((len(self.mails_done) / len(self.mails) * 100)))
-                show_message(self, "%s已发送" % msg, "success")
+                show_message(self.result_txt, "%s已发送" % msg, "success")
                 if len(self.mails_done) == len(self.mails):
-                    show_message(self, "已全部发送", "success")
+                    show_message(self.result_txt, "已全部发送", "success")
                     self.stop()
 
     def stop_thread(self):
@@ -184,6 +194,6 @@ def main(test_error=False):
 
 if __name__ == "__main__":
     # 测试有error和没有error的情况
-    # exit_error = True
-    exit_error = False
+    exit_error = True
+    # exit_error = False
     main(exit_error)

@@ -1,7 +1,7 @@
 import time
 # 显示log信息
-def show_message(self, msg, level="info"):
-    if self.is_debug:
+def show_message(msg_browser, msg, is_debug=False, level="info"):
+    if is_debug:
         print(msg)
     time_curr = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     # self.result_txt.append("<p></p>")/
@@ -15,6 +15,6 @@ def show_message(self, msg, level="info"):
     else:
         text = "<p style='color: black'>"+"信息："+text+"</p>"
     print("text", text)
-    self.result_txt.append(text)
+    msg_browser.append(text)
     # self.result_txt
     # self.result_txt.scroll(-1, -1)
