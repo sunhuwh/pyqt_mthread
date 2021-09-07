@@ -1,114 +1,23 @@
+#!/usr/bin/python
+# coding:UTF-8
 """
 description: 解决pyQT在多线程环境下，任务时间长导致页面假死问题以及多线程下任务异常问题
 解决方案：
 1. 定义一个子进程，专门做长时间操作
 2. 子进程中如果有多线程，并且多线程下，如果某个任务异常，则终止所有剩余任务（当然，也可以自定义不终止所有）
 """
-
-import queue
-import time
-from concurrent.futures import ThreadPoolExecutor, wait, ALL_COMPLETED, FIRST_EXCEPTION
-from PyQt5 import QtWidgets, QtCore
+from PyQt5 import QtWidgets
 import os
 from PyQt5.QtCore import pyqtSignal, QThread
 
+from TaskThreadService import *
+from TimeConsumingRunThreadService import TimeConsumingRunThread
 from log import show_message
 from mailService import MailService
 from ui.main_windows import Ui_MainWindow
 
 _global_dict = {}
 mail_service = MailService()
-
-class TaskThread():
-
-    signal = None
-    info_callback = None
-
-    def __init__(self, result_txt, test_error, target_error, targets):
-        super(TaskThread, self).__init__()
-        self.result_txt = result_txt
-        self.test_error = test_error
-        self.target_error = target_error
-        self.targets = targets
-        self._error_logs = {}
-
-    def set_info_callback(self, emit):
-        self.info_callback = emit
-
-    def run(self):
-        """
-        必须定义run方法，出发就用run方法触发
-        """
-        exec_queue = queue.Queue()
-        self._error_logs = {}
-        exist_error = False
-        with ThreadPoolExecutor(max_workers=None) as executor:
-            task_dict, task_list = {}, []
-            for i in range(len(self.targets)):
-                mail = self.targets[i]
-                task = executor.submit(mail_service.send, exec_queue, self.result_txt, self._error_logs,
-                                       mail, i, self.info_callback, self.test_error)
-                task_dict[task] = mail
-                task_list.append(task)
-            wait(task_list, return_when=FIRST_EXCEPTION)
-            # 反向序列化之前塞入的任务队列，并逐个取消
-            for task in reversed(task_list):
-                task.cancel()
-
-            # 等待正在执行任务执行完成
-            wait(task_list, return_when=ALL_COMPLETED)
-            exist_error = False
-            for task in task_list:
-                if task_dict.get(task):
-                    target = task_dict.get(task)
-                    if "finished returned NoneType" in str(task) or task.cancelled():
-                        exist_error = True
-                        self.info_callback(",".join([target, "true"]))
-                        print("{}被取消".format(target))
-                    elif "finished raised Exception" in str(task):
-                        exist_error = True
-                        print("{}执行异常".format(target))
-                        self.info_callback(",".join([target, "true"]))
-                        self.target_error.append(target)
-                        show_message(self.result_txt, "email发送异常：%s" % target, "error")
-                        show_message(self.result_txt, self._error_logs[target], "error")
-                        # 如果异常就将线程池关掉，以免还进行后续操作
-                        print("线程关闭")
-                        executor.shutdown()
-                    else:
-                        print("{}执行成功".format(target))
-        if not exist_error:
-            print("整体运作正常")
-
-# 继承 QObject
-class TimeConsumingRunThread(QtCore.QObject):
-    """
-    定义耗时长的操作
-    """
-
-    # 通过类成员对象定义信号对象，可定义多个
-    _signal = pyqtSignal(str)
-
-    def __init__(self, main_handle):
-        super(TimeConsumingRunThread, self).__init__()
-        self.flag = True
-        self.main_handle = main_handle
-        self.main_handle.set_info_callback(self.success_back)
-
-    def success_back(self, content):
-        self._signal.emit(content)
-
-    def __del__(self):
-        print
-        ">>> __del__"
-
-    def run(self):
-        start_time = int(time.time())
-
-        self.main_handle.run()
-
-        end_time = int(time.time())
-        print("total_time", end_time - start_time)
 
 class myWindow(QtWidgets.QMainWindow, Ui_MainWindow):
     mails = ["111.qq.com", "222.qq.com", "333.qq.com", "444.qq.com", "555.qq.com", "666.qq.com", "777.qq.com"]
@@ -134,21 +43,22 @@ class myWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         多线程
         """
         task_thread = TaskThread(self.result_txt, self.test_error, self.mails_error, self.mails)
-        self.time_consuming_thread = TimeConsumingRunThread(task_thread)  # 1. 初始化自定义线程对象,耗时长的在这里
-        self.thread_root = QThread(self)  # 2.创建QT线程
+        self._time_consuming_thread = TimeConsumingRunThread(task_thread)
+        # 1. 初始化自定义线程对象,耗时长的在这里
+        self.thread_root = QThread(self)
+        # 2.创建QT线程
         _global_dict["parent"] = self
-
-        self.time_consuming_thread.moveToThread(self.thread_root)  # 3.自定义线程移到QT线程中
-        self._startThread_my_signal.connect(self.time_consuming_thread.run)  # 4.创建信号-槽 通过信号-槽启动线程处理函数，只能通过 _startThread.emit()来出发
-        self.time_consuming_thread._signal.connect(self.call_backlog)  # 5.创建信号回调函数，通过self.signal.emit(mail)
-
+        # 3.自定义线程移到QT线程中
+        self._time_consuming_thread.moveToThread(self.thread_root)
+        # 4.创建信号-槽 通过信号-槽启动线程处理函数，只能通过 _startThread.emit()来出发
+        self._startThread_my_signal.connect(self._time_consuming_thread.run)
+        self._time_consuming_thread._signal.connect(self.call_backlog)  # 5.创建信号回调函数，通过self.signal.emit(mail)
 
     def submit(self):
         self.progressBar.setStyleSheet(
             "QProgressBar {   border-radius: 5px;   text-align: center;}")
         if self.thread_root.isRunning():  # 如果该线程正在运行，则不再重新启动
             return
-        # mywindows = global_dict["parent"]
         self.mails_error = []
         self.mails_done = []
         show_message(self.result_txt, "邮件发送中")
@@ -157,28 +67,35 @@ class myWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         self.progressBar.setValue(0)
 
         """先启动子线程,再启动主线程"""
-        self.time_consuming_thread.flag = True
         self.thread_root.start()
         # 发送信号，启动线程处理函数
         # 不能直接调用，否则会导致线程处理函数和主线程是在同一个线程，同样操作不了主界面
         self._startThread_my_signal.emit()
 
-    def stop(self):
-        show_message(self.result_txt, "主线程停止")
-        self.pushButton.setText("开始发送")
-        self.pushButton.setEnabled(True)
+    def stop(self, callback):
+        """通用"""
+        if callback is not None:
+            callback()
         if not self.thread_root.isRunning():  # 如果该线程已经结束，则不再重新关闭
             return
-        self.time_consuming_thread.flag = False
         self.stop_thread()
 
+    def process_error_style(self):
+        """通用"""
+        self.progressBar.setStyleSheet(
+            "QProgressBar {  border-radius: 5px;   background-color: red;}QProgressBar::chunk {   background-color: #007FFF;   width: 10px;}QProgressBar {   border-radius: 5px;   text-align: center;}")
+
+    def stop_call_back(self):
+        """自定义结束线程后"""
+        self.pushButton.setText("开始发送")
+        self.pushButton.setEnabled(True)
+
     def call_backlog(self, all_msg):
+        """自定义子线程传过来的数据处理"""
         msgs = all_msg.split(",")
-        if len(msgs) > 1:
-            self.stop()
-            self.progressBar.setStyleSheet(
-                "QProgressBar {  border-radius: 5px;   background-color: red;}QProgressBar::chunk {   background-color: #007FFF;   width: 10px;}QProgressBar {   border-radius: 5px;   text-align: center;}")
-            # self.progressBar.setColor("red")
+        if len(msgs) > 1:  # 当消息长度超过1，那么就代表有处理异常
+            self.stop(self.stop_call_back)
+            self.process_error_style()
         else:
             msg = msgs[0]
             if msg:
@@ -187,9 +104,10 @@ class myWindow(QtWidgets.QMainWindow, Ui_MainWindow):
                 show_message(self.result_txt, "%s已发送" % msg, "success")
                 if len(self.mails_done) == len(self.mails):
                     show_message(self.result_txt, "已全部发送", "success")
-                    self.stop()
+                    self.stop(self.stop_call_back)
 
     def stop_thread(self):
+        """通用"""
         print
         ">>> stop_thread... "
         # if not self.time_consuming_thread.flag:
@@ -200,12 +118,6 @@ class myWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         self.thread_root.wait()  # 回收资源
         print
         ">>> stop_thread end... "
-
-    def clear_result(self):
-        self.result_txt.setText("")
-
-    def open_out_dir(self):
-        os.startfile(self.out_folder)
 
 def main(test_error=False):
     import sys
