@@ -1,12 +1,10 @@
-import threading
+import queue
 import time
-import traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, ALL_COMPLETED, FIRST_EXCEPTION
 from concurrent.futures.thread import ThreadPoolExecutor
-from datetime import datetime
 from PyQt5 import QtWidgets, QtCore
 import os
-from PyQt5.QtCore import QStringListModel, pyqtSignal, QThread
-from PyQt5.QtWidgets import QFileDialog
+from PyQt5.QtCore import pyqtSignal, QThread
 
 from log import show_message
 from mailService import MailService
@@ -23,6 +21,7 @@ class TimeConsumingRunThread(QtCore.QObject):
 
     #  通过类成员对象定义信号对象，可定义多个
     signal = pyqtSignal(str)
+    error_logs = {}
 
     def __init__(self):
         super(TimeConsumingRunThread, self).__init__()
@@ -38,23 +37,45 @@ class TimeConsumingRunThread(QtCore.QObject):
         self.signal.emit(result)
 
     def run(self):
+        self.error_logs = {}
+        exec_queue = queue.Queue()
         my_windows = _global_dict["parent"]
         start_time = int(time.time())
         exist_error = False
         with ThreadPoolExecutor(max_workers=None) as executor:
+            task_dict, task_list = {}, []
             for i in range(len(myWindow.mails)):
-                try:
-                    # 这里使用 add_done_callback 来进行回调，当函数执行完成后，自动回调；也可以用_invoke_callbacks临时回调
-                    executor.submit(mail_service.send, my_windows, my_windows.mails, i, my_windows.test_error).add_done_callback(self.handle_done)
-                except Exception:
-                    # 如果异常就将线程池关掉，以免还进行后续操作
-                    print("线程关闭")
-                    self.signal.emit(",".join([myWindow.mails[i], "true"]))
-                    my_windows.mails_error.append(myWindow.mails[i])
-                    exist_error = True
-                    # traceback.print_exc()
-                    print("邮件发送异常：%s" % myWindow.mails[i])
-                    executor.shutdown()
+                mail = myWindow.mails[i]
+                task = executor.submit(mail_service.send, exec_queue, self, mail, i, my_windows.test_error)
+                task_dict[task] = mail
+                task_list.append(task)
+            wait(task_list, return_when=FIRST_EXCEPTION)
+            # 反向序列化之前塞入的任务队列，并逐个取消
+            for task in reversed(task_list):
+                task.cancel()
+
+            # 等待正在执行任务执行完成
+            wait(task_list, return_when=ALL_COMPLETED)
+            exist_error = False
+            for task in task_list:
+                if task_dict.get(task):
+                    target = task_dict.get(task)
+                    if "finished returned NoneType" in str(task) or task.cancelled():
+                        exist_error = True
+                        self.signal.emit(",".join([target, "true"]))
+                        print("{}被取消".format(target))
+                    elif "finished raised Exception" in str(task):
+                        exist_error = True
+                        print("{}执行异常".format(target))
+                        self.signal.emit(",".join([target, "true"]))
+                        my_windows.mails_error.append(target)
+                        show_message(my_windows, "文件转换异常：%s" % target, "error")
+                        show_message(my_windows, self.error_logs[target], "error")
+                        # 如果异常就将线程池关掉，以免还进行后续操作
+                        print("线程关闭")
+                        executor.shutdown()
+                    else:
+                        print("{}执行成功".format(target))
         if not exist_error:
             print("整体运作正常")
         end_time = int(time.time())
@@ -168,7 +189,6 @@ def main(test_error=False):
 
 if __name__ == "__main__":
     # 测试有error和没有error的情况
-    exit_error = True
-    # exit_error = False
-
+    # exit_error = True
+    exit_error = False
     main(exit_error)
